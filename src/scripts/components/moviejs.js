@@ -223,6 +223,7 @@ module.exports = function (id, options) {
                     var distance  = hotSpot[toKey] - hotSpot[fromKey];
                     var frameDiff = (toFrame - fromFrame);
                     var repeats   = (self.currentFrame - fromFrame) / frameDiff;
+                    var step;
                     if (repeats % frameDiff === 0 && repeats > 1) {
                       step = self.currentFrame - fromFrame + repeats * frameDiff;
                     } else {
@@ -230,10 +231,8 @@ module.exports = function (id, options) {
                     }
                     if (repeats < 1 || (to.loop && repeats > 1)) {
                       var factor = step / frameDiff;
-                      console.log(step, factor);
                       if (!hotSpot.origin[key]) hotSpot.origin[key] = hotSpot[key];
                       hotSpot[key] = ease(factor) * distance + hotSpot[fromKey];
-                      console.log(hotSpot[key]);
                     }
                   }
                 }
