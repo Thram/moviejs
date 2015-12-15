@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title></title>
+    <style>
+        canvas {
+            margin: auto;
+            display: block;
+            height: 100%;
+        }
+
+        .container {
+            height: 120px;
+        }
+    </style>
+</head>
+<!-- build:css -->
+<link rel="stylesheet" href="../stylesheets/app.scss">
+<!-- endbuild -->
+<body>
+<!-- YOUR CODE -->
+<div class="container">
+    <canvas id="pipi" width="80" height="120"></canvas>
+</div>
+<div id="ball" style="width: 20px;height: 20px; background: gray; border-radius: 50%;"></div>
+<div class="actions_fields">
+    <button id="play">Play</button>
+    <button id="stop">Stop</button>
+    <button id="left">Left</button>
+    <button id="right">Right</button>
+    <label id="current"></label>
+</div>
+
+
+<!--CDN <script src="//code.createjs.com/createjs-2015.11.26.min.js"></script>-->
+<!-- build:vendor -->
+<script src="../scripts/vendor/createjs-2015.11.26.min.js"></script>
+<!-- endbuild -->
+<!-- build:js -->
+<script src="../scripts/app.js"></script>
+<!-- endbuild -->
+
+</body>
+</html>
