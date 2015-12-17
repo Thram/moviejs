@@ -3,6 +3,13 @@
  */
 var validate   = require('./validate');
 module.exports = {
+  pluck  : function (collection, key) {
+    var result = [];
+    this.iterate(collection, function (item) {
+      result.push(item[key]);
+    });
+    return result;
+  },
   iterate: function (collection, callback) {
     if (validate.isArray(collection) || validate.isNodeList(collection)) {
       for (var i = 0; i < collection.length; i++) {

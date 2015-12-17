@@ -15,46 +15,80 @@ var loop       = require('../toolbox/loop');
 module.exports = function (id, options) {
   if (options) {
     var self         = this;
-    var autoload     = options.autoload || true;
-    var autoplay     = options.autoplay || true;
-    var drag         = options.drag || false;
+    var autoload     = validate.isUndefined(options.autoload) ? true : options.autoload;
+    var autoplay     = validate.isUndefined(options.autoplay) ? true : options.autoplay;
+    var drag         = validate.isUndefined(options.drag) ? true : options.drag;
     var invertFromTo = false;
 
-    var stage, movie, frame, width, height;
+    var stage, movie, frame, width, height, assetsManifest, loadedImages = [];
 
-    self.initialFrame = options.initialFrame || 0;
-    self.currentFrame = options.initialFrame || 0;
-    self.fps          = options.fps || 20;
+    self.initialFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
+    self.currentFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
+    self.fps          = validate.isUndefined(options.fps) ? 60 : options.fps;
     self.frames       = options.frames || [];
-    self.direction    = options.direction || 'forward';
-    self.scale        = undefined;
-    self.playing      = false;
-    self.hotSpots     = [];
+    self.totalFrames  = self.frames.length - 1; // Included 0
+    assetsManifest = self.frames;
+    self.direction = options.direction || 'forward';
+    self.scale     = undefined;
+    self.local     = options.local || false;
+    self.playing   = false;
+    self.hotSpots  = [];
 
     events.implement(self);
 
     stage = new createjs.Stage(id);
 
     movie = new createjs.Container();
-    frame = new createjs.Bitmap();
-    movie.addChild(frame);
     stage.addChild(movie);
     stage.canvas.parentNode.style.display = 'inline-block';
 
     // grab canvas width and height for later calculations:
-    width  = stage.canvas.width;
-    height = stage.canvas.height;
+    width       = stage.canvas.width;
+    height      = stage.canvas.height;
+    self.bounds = stage.canvas.getBoundingClientRect();
 
     createjs.Ticker.framerate = 60;
 
     // Update the stage
-    var _tick = function (event) {
+    var _tick = function () {
       self.trigger('update');
       stage.update();
     };
     createjs.Ticker.addEventListener("tick", _tick);
 
     //Private Methods
+    var _preload = function (callback) {
+      var queue = new createjs.LoadQueue(self.local); // new createjs.LoadQueue(false) if local
+      self.trigger('loading:start', event);
+      queue.on("error", function (event) {
+        self.trigger('loading:error', event);
+      });
+      queue.on("fileload", function (event) {
+        self.trigger('loading:fileload', event);
+      });
+      queue.on("fileprogress", function (event) {
+        self.trigger('loading:fileprogress', event);
+      });
+      queue.on("progress", function (event) {
+        self.trigger('loading:progress', event);
+      });
+
+      queue.on("complete", function (event) {
+        self.trigger('loading:complete', event);
+        callback(queue);
+      });
+      queue.loadManifest(assetsManifest);
+    };
+
+    var _setupContainer = function (container, options) {
+      loop.each(options.attributes, function (value, key) {
+        container[key] = value;
+      });
+      container.origin  = options.attributes || {};
+      container.visible = false;
+      stage.addChild(container);
+    };
+
     var _addHtml = function (selector, options) {
       if (validate.isObject(selector)) {
         options  = selector;
@@ -64,8 +98,8 @@ module.exports = function (id, options) {
       if (html) {
         if (options.id) html.id = options.id;
         if (options.className) html.className = options.className;
-        if (options.height) html.style.height = options.height;
-        if (options.width) html.style.width = options.width;
+        if (!validate.isUndefined(options.height)) html.style.height = options.height;
+        if (!validate.isUndefined(options.width)) html.style.width = options.width;
         html.style.position = "absolute";
         html.style.top      = 0;
         html.style.left     = 0;
@@ -73,11 +107,8 @@ module.exports = function (id, options) {
         document.body.appendChild(html);
 
         var container = new createjs.DOMElement(html);
-        loop.each(options.attributes, function (value, key) {
-          container[key] = value;
-        });
-        container.origin = options.attributes || {};
-        stage.addChild(container);
+        _setupContainer(container, options);
+        html.style.display = "block";
         return container;
       } else {
         throw 'ERROR: DOM Element not found!';
@@ -88,23 +119,14 @@ module.exports = function (id, options) {
     var _play = function () {
       if (self.direction === 'forward') self.currentFrame++;
       if (self.direction === 'backward') self.currentFrame--;
-      if (self.currentFrame > (self.frames.length - 1)) self.currentFrame = 0;
-      if (self.currentFrame < 0) self.currentFrame = self.frames.length - 1;
+      if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
+      if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
       self.show(self.currentFrame);
-    };
-
-    var _resetHotSpot = function (hotSpot) {
-      var start = self.direction === 'backward' ? hotSpot.lastState : hotSpot.origin;
-      loop.each(start, function (value, key) {
-        hotSpot[key] = value;
-      });
-      // Force Reset
-      stage.update();
     };
 
     var _visibility = function (hotSpot) {
       var visible = false;
-      if (hotSpot.frames) {
+      if (!validate.isUndefined(hotSpot.frames)) {
         var type = validate.type(hotSpot.frames);
         switch (type) {
           case 'array':
@@ -112,25 +134,18 @@ module.exports = function (id, options) {
               return a - b;
             });
             if (hotSpot.frames.indexOf(self.currentFrame) > -1) {
-              if (hotSpot.frames[0] === self.currentFrame || hotSpot.frames[hotSpot.frames.length - 1] === self.currentFrame) {
-                _resetHotSpot(hotSpot);
-              }
               visible = true;
             }
             break;
           case 'object':
             if (hotSpot.frames.range) {
               if (hotSpot.frames.range[0] <= self.currentFrame && hotSpot.frames.range[1] >= self.currentFrame) {
-                if (hotSpot.frames.range[0] === self.currentFrame || hotSpot.frames.range[1] === self.currentFrame) {
-                  _resetHotSpot(hotSpot);
-                }
                 visible = true;
               }
             }
             break;
           case 'number':
             if (hotSpot.frames === self.currentFrame) {
-              _resetHotSpot(hotSpot);
               visible = true;
             }
             break;
@@ -138,117 +153,175 @@ module.exports = function (id, options) {
             visible = false;
         }
       } else {
-        if (0 === self.currentFrame || self.frames.length - 1 === self.currentFrame) {
-          _resetHotSpot(hotSpot);
-        }
         visible = true;
       }
       return visible;
+    };
+
+    var _updateReg = function (hotSpot, animation) {
+      if (!validate.isUndefined(animation.regX)) {
+        hotSpot.regX = animation.regX;
+      }
+      if (!validate.isUndefined(animation.regY)) {
+        hotSpot.regY = animation.regY;
+      }
+    };
+
+    var _processAnimation = function (hotSpot, animation, startFrame) {
+      if (animation.attributes || animation.radial) {
+        animation.start = parseInt(startFrame);
+        if (validate.isUndefined(animation.end)) {
+          animation.end = animation.start + animation.duration;
+        } else {
+          animation.duration = animation.end - animation.start;
+        }
+        animation.overflow = false;
+        var end, start     = animation.start;
+        if (animation.end > self.totalFrames) {
+          end                = animation.end - self.totalFrames;
+          animation.overflow = true;
+        } else {
+          end = animation.end;
+        }
+        if ((self.currentFrame >= animation.start && self.currentFrame <= animation.end) ||
+          (animation.overflow &&
+          ((self.currentFrame >= start && self.currentFrame > end) || (self.currentFrame < start && self.currentFrame <= end)))) {
+
+          var ease     = animation.ease,
+              duration = Math.abs(animation.duration);
+          var repeats  = (self.currentFrame - start) / duration;
+
+          var update = function (key) {
+            var fromKey = key + '-from', toKey = key + '-to', distanceKey = key + '-distance';
+            if (self.currentFrame === start) {
+              hotSpot[key] = animation[fromKey];
+              _updateReg(hotSpot, animation);
+            } else {
+              if (self.currentFrame === end) {
+                hotSpot[key] = animation[toKey];
+              } else {
+                var step;
+                if (animation.overflow && self.currentFrame < start && self.currentFrame <= end) {
+                  step = self.currentFrame + (self.totalFrames - start);
+                } else {
+                  step = self.currentFrame - start;
+                }
+                if (repeats % duration === 0 && repeats > 1) {
+                  step += repeats * duration;
+                }
+                if (repeats < 1 || (animation.loop && repeats > 1)) {
+                  var progress = step / duration, factor, delta;
+                  if (validate.isUndefined(hotSpot.origin[key])) hotSpot.origin[key] = hotSpot[key];
+                  ease         = ease || createjs.Ease.linear;
+                  factor       = ease(progress);
+                  delta        = factor * (animation[distanceKey] || animation[toKey]);
+                  hotSpot[key] = delta + animation[fromKey];
+                }
+              }
+            }
+          };
+
+          var updateRadial = function (key) {
+            var fromKey = key + '-from', radial = animation.radial[key];
+            if (self.currentFrame === start) {
+              _updateReg(hotSpot, animation);
+            }
+            var step;
+            if (repeats % duration === 0 && repeats > 1) {
+              step = self.currentFrame - start + repeats * duration;
+            } else {
+              step = self.currentFrame - start;
+            }
+            if (repeats < 1 || (animation.loop && repeats > 1)) {
+              var progress = step / duration, factor, delta;
+              var angle    = progress * 360 + (radial.offset || 0);
+              factor       = Math.cos(angle / 180 * Math.PI);
+              delta        = factor * radial.radius;
+              hotSpot[key] = delta + animation[fromKey];
+            }
+          };
+          var attributes   = animation.attributes ? Object.keys(animation.attributes) : Object.keys(animation.radial);
+          if (attributes) {
+            loop.iterate(attributes, function (key) {
+              if (animation.attributes) {
+                update(key);
+              } else {
+                updateRadial(key);
+              }
+
+            });
+          }
+        }
+      } else {
+        _updateReg(hotSpot, animation);
+      }
+
+    };
+
+    var _processAnimations = function (hotSpot) {
+      loop.each(hotSpot.animations, function (animations, startFrame) {
+        if (validate.isArray(animations)) {
+          loop.iterate(animations, function (animation) {
+            _processAnimation(hotSpot, animation, startFrame);
+          });
+        } else {
+          _processAnimation(hotSpot, animations, startFrame);
+        }
+      });
+
     };
 
     var _updateHotSpots = function () {
       loop.iterate(self.hotSpots, function (hotSpot) {
         var visible = _visibility(hotSpot);
         if (visible && hotSpot.animations) {
-          var frames = Object.keys(hotSpot.animations);
-          frames.sort(function (a, b) {
-            return self.direction === 'backward' ? b - a : a - b;
-          });
-          loop.iterate(frames, function (frame, index) {
-            frame     = parseInt(frame);
-            var fromFrame, toFrame, to;
-            fromFrame = frame;
-            to        = hotSpot.animations[fromFrame];
-            toFrame   = fromFrame + to.duration;
-            // Start point
-            if (self.currentFrame >= fromFrame && self.currentFrame <= toFrame || (self.currentFrame > toFrame)) {
-              var duration = to.duration;
-              var ease     = to.ease || createjs.Ease.linear;
-              if (self.direction === 'backward') {
-                toFrame = frame;
-                if (hotSpot.animations[frames[index + 1]]) {
-                  to = hotSpot.animations[frames[index + 1]] || {attributes: hotSpot.origin};
-                  loop.each(hotSpot.origin, function (value, key) {
-                    if (!to.attributes[key])to.attributes[key] = value;
-                  });
-                } else {
-                  to = {attributes: hotSpot.origin};
-                }
-
-                fromFrame = frame + duration;
-                if (to.reverseEase) {
-                  ease = to.reverseEase;
-                } else {
-                  var replaceEase = function (key, from, to) {
-                    var reverseKey = key.replace(from, to);
-                    if (createjs.Ease[reverseKey]) {
-                      ease = createjs.Ease[reverseKey];
-                    }
-                  };
-                  loop.iterate(Object.keys(createjs.Ease), function (key) {
-                    if (ease === createjs.Ease[key]) {
-                      if (key.indexOf('InOut') === -1) {
-                        if (key.indexOf('In') > -1) {
-                          replaceEase(key, 'In', 'Out');
-                          return false;
-                        }
-                        if (key.indexOf('Out') > -1) {
-                          replaceEase(key, 'Out', 'In');
-                          return false;
-                        }
-                      }
-                    }
-                  });
-                }
-              }
-              var update = function (key, value) {
-                var fromKey = key + '-from', toKey = key + '-to';
-                if (self.currentFrame === fromFrame) {
-                  hotSpot[fromKey] = hotSpot[key];
-                  hotSpot[toKey]   = value;
-                } else {
-                  if (self.currentFrame === toFrame) {
-                    hotSpot[key] = value;
-                    if (!to.loop) {
-                      hotSpot[fromKey] = undefined;
-                      hotSpot[toKey]   = undefined;
-                    }
-
-                  } else {
-                    if (invertFromTo) {
-                      var aux          = hotSpot[toKey];
-                      hotSpot[toKey]   = hotSpot[fromKey];
-                      hotSpot[fromKey] = aux;
-                    }
-                    var distance  = hotSpot[toKey] - hotSpot[fromKey];
-                    var frameDiff = (toFrame - fromFrame);
-                    var repeats   = (self.currentFrame - fromFrame) / frameDiff;
-                    var step;
-                    if (repeats % frameDiff === 0 && repeats > 1) {
-                      step = self.currentFrame - fromFrame + repeats * frameDiff;
-                    } else {
-                      step = self.currentFrame - fromFrame;
-                    }
-                    if (repeats < 1 || (to.loop && repeats > 1)) {
-                      var factor = step / frameDiff;
-                      if (!hotSpot.origin[key]) hotSpot.origin[key] = hotSpot[key];
-                      hotSpot[key] = ease(factor) * distance + hotSpot[fromKey];
-                    }
-                  }
-                }
-              };
-
-              loop.each(to.attributes, function (value, key) {
-                update(key, value);
-              });
-
-              if (invertFromTo) invertFromTo = false;
-            }
-          });
+          _processAnimations(hotSpot);
         }
         hotSpot.visible = visible;
       });
 
+    };
+
+    var _setupDrag = function () {
+      var x0;
+      movie.on("pressmove", function (evt) {
+        if (!x0) {
+          x0 = evt.stageX;
+          self.pause();
+        }
+        var x = evt.stageX;
+        if (x - x0 > 0) {
+          self.changeDirection('forward');
+          self.currentFrame++;
+        } else {
+          self.changeDirection('backward');
+          self.currentFrame--;
+        }
+        x0 = x;
+        if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
+        if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
+        self.show(self.currentFrame);
+      });
+      movie.on("pressup", function () {
+        x0 = undefined;
+      });
+    };
+
+    var _setScale = function () {
+      var image = loadedImages[0];
+      if (!self.scale) {
+        self.scale = {
+          x: width / image.width,
+          y: height / image.height
+        };
+      }
+      movie.scaleX = self.scale.x;
+      movie.scaleY = self.scale.y;
+    };
+
+    var _createFrame = function () {
+      frame = new createjs.Bitmap();
+      movie.addChild(frame);
     };
 
     //Public API
@@ -274,39 +347,63 @@ module.exports = function (id, options) {
     };
 
     self.show = function (index) {
-      var image = queue.getResult(self.frames[index].id);
-      if (!self.scale) {
-        self.scale = {
-          x: width / image.width,
-          y: height / image.height
-        };
-      }
-      movie.scaleX = self.scale.x;
-      movie.scaleY = self.scale.y;
-
-      frame.image  = image;
+      frame.image  = loadedImages[index];
       var frameKey = 'frame-' + index;
       self.trigger(frameKey);
       _updateHotSpots();
     };
 
     self.addHotSpot = function (options) {
-      var hotSpot        = _addHtml(options.element, {
-        className : 'hot-spot',
-        attributes: options.attributes
-      });
+      var hotSpot;
+      if (validate.isString(options.element) || validate.isDOMElement(options.element)) {
+        hotSpot = _addHtml(options.element, {
+          className : 'hot-spot',
+          attributes: options.attributes
+        });
+      } else {
+        hotSpot = _setupContainer(options.element, options);
+      }
+
       hotSpot.frames     = options.frames;
       hotSpot.animations = options.animations;
-      hotSpot.lastState  = {};
-      var frames         = Object.keys(hotSpot.animations);
-      frames.sort(function (a, b) {
-        return a - b;
-      });
-      loop.iterate(frames, function (frame) {
-        loop.each(hotSpot.animations[frame].attributes, function (value, key) {
-          hotSpot.lastState[key] = value;
+      if (hotSpot.animations) {
+        var frames = Object.keys(hotSpot.animations);
+        frames.sort(function (a, b) {
+          return a - b;
         });
-      });
+
+        var modifAttr = {};
+        loop.iterate(frames, function (frame) {
+          var updateAnimations = function (animation) {
+            var attributes = animation.attributes ? animation.attributes : animation.radial;
+            if (attributes) {
+              animation.fromFrame = parseInt(frame);
+              animation.toFrame   = animation.fromFrame + animation.duration;
+              if (animation.toFrame > self.totalFrames) {
+                animation.toFrame  = animation.toFrame - self.totalFrames;
+                animation.overflow = true;
+              }
+              loop.each(attributes, function (value, key) {
+                var fromKey        = key + '-from', toKey = key + '-to', distanceKey = key + '-distance';
+                animation[fromKey] = validate.isUndefined(modifAttr[key]) ? hotSpot[key] : modifAttr[key];
+                if (animation.attributes) {
+                  animation[toKey]       = value;
+                  animation[distanceKey] = animation[toKey] - animation[fromKey];
+                }
+                modifAttr[key] = value;
+              });
+            }
+          };
+
+          if (validate.isArray(hotSpot.animations[frame])) {
+            loop.iterate(hotSpot.animations[frame], function (animation) {
+              updateAnimations(animation);
+            });
+          } else {
+            updateAnimations(hotSpot.animations[frame]);
+          }
+        });
+      }
       self.hotSpots.push(hotSpot);
     };
 
@@ -367,59 +464,33 @@ module.exports = function (id, options) {
       }
     };
 
-    // Start Movie
+    self.relativeX = function (percentage) {
+      return percentage / 100 * self.bounds.width;
+    };
+    self.relativeY = function (percentage) {
+      return percentage / 100 * self.bounds.height;
+    };
+
+    self.setAssets = function (assets) {
+      assetsManifest = assetsManifest.concat(assets);
+    };
 
     // Preload Frames
-    var queue = new createjs.LoadQueue(false); // new createjs.LoadQueue(false) if local
-    queue.on("error", function (event) {
-      self.trigger('loading:error', event);
-    });
-    queue.on("fileload", function (event) {
-      self.trigger('loading:fileload', event);
-    });
-    queue.on("fileprogress", function (event) {
-      self.trigger('loading:fileprogress', event);
-    });
-    queue.on("progress", function (event) {
-      self.trigger('loading:progress', event);
+    _preload(function (queue) {
+      // Start
+      loop.iterate(queue.getItems(), function (item) {
+        loadedImages.push(item.result);
+      });
+      _createFrame(queue);
+      _setScale();
+
+      if (drag) _setupDrag();
+      if (autoload)  self.show(self.initialFrame);
+      if (autoplay)  self.play();
     });
 
-    queue.on("complete", function (event) {
-      self.trigger('loading:complete', event);
-      if (drag) {
-        var x0;
-        movie.on("pressmove", function (evt) {
-          if (!x0) {
-            x0 = evt.stageX;
-            self.pause();
-          }
-          var x = evt.stageX;
-          if (x - x0 > 0) {
-            self.changeDirection('forward');
-            self.currentFrame++;
-          } else {
-            self.changeDirection('backward');
-            self.currentFrame--;
-          }
-          x0 = x;
-          if (self.currentFrame > (self.frames.length - 1)) self.currentFrame = 0;
-          if (self.currentFrame < 0) self.currentFrame = self.frames.length - 1;
-          self.show(self.currentFrame);
-        });
-        movie.on("pressup", function (evt) {
-          x0 = undefined;
-        });
-      }
-      if (autoload) {
-        self.show(self.initialFrame);
-      }
-      if (autoplay) {
-        self.play();
-      }
-    });
-    queue.loadManifest(self.frames);
-
-  } else {
+  }
+  else {
     throw 'ERROR: "options" parameter missing!';
   }
 };
