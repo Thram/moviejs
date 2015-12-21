@@ -1,7 +1,7 @@
 // Add your code
-var movie = require('./components/moviejs');
-var loop  = require('./toolbox/loop');
-var app   = function () {
+var movie      = require('./components/moviejs');
+var collection = require('./toolbox/collection');
+var app        = function () {
   var frames = [];
   for (var i = 1; i <= 14; i++) {
     var slide = ('00' + i).slice(-2);

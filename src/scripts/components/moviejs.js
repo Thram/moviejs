@@ -11,7 +11,7 @@
  */
 var events     = require('../toolbox/events');
 var validate   = require('../toolbox/validate');
-var loop       = require('../toolbox/loop');
+var collection = require('../toolbox/collection');
 module.exports = function (id, options) {
   if (options) {
     var self         = this;
@@ -24,30 +24,36 @@ module.exports = function (id, options) {
 
     self.initialFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
     self.currentFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
-    self.fps          = validate.isUndefined(options.fps) ? 60 : options.fps;
+    self.fps          = validate.isUndefined(options.fps) ? 14 : options.fps;
     self.frames       = options.frames || [];
     self.totalFrames  = self.frames.length - 1; // Included 0
     assetsManifest = self.frames;
     self.direction = options.direction || 'forward';
     self.scale     = undefined;
     self.local     = options.local || false;
+    self.speed     = validate.isUndefined(options.speed) ? 1 : options.speed;
     self.playing   = false;
     self.hotSpots  = [];
 
     events.implement(self);
 
     stage = new createjs.Stage(id);
+    createjs.Touch.enable(stage);
 
     movie = new createjs.Container();
     stage.addChild(movie);
     stage.canvas.parentNode.style.display = 'inline-block';
 
     // grab canvas width and height for later calculations:
-    width       = stage.canvas.width;
-    height      = stage.canvas.height;
-    self.bounds = stage.canvas.getBoundingClientRect();
+    width             = stage.canvas.width;
+    height            = stage.canvas.height;
+    self.bounds       = stage.canvas.getBoundingClientRect();
+    self.screenBounds = document.querySelector('body').getBoundingClientRect();
 
-    createjs.Ticker.framerate = 60;
+    // Drag Unit = [distance] / [processed frames in that distance]
+    self.dragUnit = validate.isUndefined(self.dragUnit) ? self.bounds.width / self.frames.length : self.dragUnit;
+
+    createjs.Ticker.framerate = self.fps;
 
     // Update the stage
     var _tick = function () {
@@ -81,12 +87,12 @@ module.exports = function (id, options) {
     };
 
     var _setupContainer = function (container, options) {
-      loop.each(options.attributes, function (value, key) {
+      collection.each(options.attributes, function (value, key) {
         container[key] = value;
       });
       container.origin  = options.attributes || {};
       container.visible = false;
-      stage.addChild(container);
+      movie.addChild(container);
     };
 
     var _addHtml = function (selector, options) {
@@ -97,14 +103,12 @@ module.exports = function (id, options) {
       var html = validate.isDOMElement(selector) ? selector : (selector ? document.querySelector(selector) : document.createElement('div'));
       if (html) {
         if (options.id) html.id = options.id;
-        if (options.className) html.className = options.className;
+        if (options.className) html.className += ' ' + options.className;
         if (!validate.isUndefined(options.height)) html.style.height = options.height;
         if (!validate.isUndefined(options.width)) html.style.width = options.width;
         html.style.position = "absolute";
         html.style.top      = 0;
         html.style.left     = 0;
-
-        document.body.appendChild(html);
 
         var container = new createjs.DOMElement(html);
         _setupContainer(container, options);
@@ -117,8 +121,8 @@ module.exports = function (id, options) {
     };
 
     var _play = function () {
-      if (self.direction === 'forward') self.currentFrame++;
-      if (self.direction === 'backward') self.currentFrame--;
+      if (self.direction === 'forward') self.currentFrame += Math.ceil(self.speed);
+      if (self.direction === 'backward') self.currentFrame -= Math.ceil(self.speed);
       if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
       if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
       self.show(self.currentFrame);
@@ -242,7 +246,7 @@ module.exports = function (id, options) {
           };
           var attributes   = animation.attributes ? Object.keys(animation.attributes) : Object.keys(animation.radial);
           if (attributes) {
-            loop.iterate(attributes, function (key) {
+            collection.iterate(attributes, function (key) {
               if (animation.attributes) {
                 update(key);
               } else {
@@ -259,9 +263,9 @@ module.exports = function (id, options) {
     };
 
     var _processAnimations = function (hotSpot) {
-      loop.each(hotSpot.animations, function (animations, startFrame) {
+      collection.each(hotSpot.animations, function (animations, startFrame) {
         if (validate.isArray(animations)) {
-          loop.iterate(animations, function (animation) {
+          collection.iterate(animations, function (animation) {
             _processAnimation(hotSpot, animation, startFrame);
           });
         } else {
@@ -272,7 +276,7 @@ module.exports = function (id, options) {
     };
 
     var _updateHotSpots = function () {
-      loop.iterate(self.hotSpots, function (hotSpot) {
+      collection.iterate(self.hotSpots, function (hotSpot) {
         var visible = _visibility(hotSpot);
         if (visible && hotSpot.animations) {
           _processAnimations(hotSpot);
@@ -285,17 +289,21 @@ module.exports = function (id, options) {
     var _setupDrag = function () {
       var x0;
       movie.on("pressmove", function (evt) {
+        self.trigger('drag:start');
         if (!x0) {
           x0 = evt.stageX;
           self.pause();
         }
-        var x = evt.stageX;
-        if (x - x0 > 0) {
+        var x           = evt.stageX;
+        var deltaX      = x - x0;
+        var deltaFrames = Math.abs(deltaX / dragUnit);
+        var step        = Math.ceil(deltaFrames * self.speed);
+        if (deltaX > 0) {
           self.changeDirection('forward');
-          self.currentFrame++;
+          self.currentFrame += step;
         } else {
           self.changeDirection('backward');
-          self.currentFrame--;
+          self.currentFrame -= step;
         }
         x0 = x;
         if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
@@ -304,6 +312,7 @@ module.exports = function (id, options) {
       });
       movie.on("pressup", function () {
         x0 = undefined;
+        self.trigger('drag:end');
       });
     };
 
@@ -373,7 +382,7 @@ module.exports = function (id, options) {
         });
 
         var modifAttr = {};
-        loop.iterate(frames, function (frame) {
+        collection.iterate(frames, function (frame) {
           var updateAnimations = function (animation) {
             var attributes = animation.attributes ? animation.attributes : animation.radial;
             if (attributes) {
@@ -383,7 +392,7 @@ module.exports = function (id, options) {
                 animation.toFrame  = animation.toFrame - self.totalFrames;
                 animation.overflow = true;
               }
-              loop.each(attributes, function (value, key) {
+              collection.each(attributes, function (value, key) {
                 var fromKey        = key + '-from', toKey = key + '-to', distanceKey = key + '-distance';
                 animation[fromKey] = validate.isUndefined(modifAttr[key]) ? hotSpot[key] : modifAttr[key];
                 if (animation.attributes) {
@@ -396,7 +405,7 @@ module.exports = function (id, options) {
           };
 
           if (validate.isArray(hotSpot.animations[frame])) {
-            loop.iterate(hotSpot.animations[frame], function (animation) {
+            collection.iterate(hotSpot.animations[frame], function (animation) {
               updateAnimations(animation);
             });
           } else {
@@ -422,7 +431,7 @@ module.exports = function (id, options) {
       if (options.frames) {
         switch (type) {
           case 'array':
-            loop.iterate(options.frames, function (frame) {
+            collection.iterate(options.frames, function (frame) {
               remove(frame, options.hotSpot);
             });
             break;
@@ -435,7 +444,7 @@ module.exports = function (id, options) {
             break;
           case 'number':
             if (validate.isArray(options.hotSpot)) {
-              loop.iterate(options.hotSpot, function (hotSpot) {
+              collection.iterate(options.hotSpot, function (hotSpot) {
                 remove(options.frames, hotSpot);
               });
             } else {
@@ -446,7 +455,7 @@ module.exports = function (id, options) {
         }
       } else {
         if (validate.isArray(options.hotSpot)) {
-          loop.iterate(options.hotSpot, function (hotSpot) {
+          collection.iterate(options.hotSpot, function (hotSpot) {
             remove('global', hotSpot);
           });
         } else {
@@ -464,11 +473,11 @@ module.exports = function (id, options) {
       }
     };
 
-    self.relativeX = function (percentage) {
-      return percentage / 100 * self.bounds.width;
+    self.relativeX = function (percentage, screen) {
+      return percentage / 100 * (screen ? self.screenBounds.width : self.bounds.width);
     };
-    self.relativeY = function (percentage) {
-      return percentage / 100 * self.bounds.height;
+    self.relativeY = function (percentage, screen) {
+      return percentage / 100 * (screen ? self.screenBounds.height : self.bounds.height);
     };
 
     self.setAssets = function (assets) {
@@ -478,7 +487,7 @@ module.exports = function (id, options) {
     // Preload Frames
     _preload(function (queue) {
       // Start
-      loop.iterate(queue.getItems(), function (item) {
+      collection.iterate(queue.getItems(), function (item) {
         loadedImages.push(item.result);
       });
       _createFrame(queue);
