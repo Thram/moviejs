@@ -11,12 +11,12 @@
  */
 var events     = require('../toolbox/events');
 var validate   = require('../toolbox/validate');
-var collection = require('../toolbox/collection');
+var loop       = require('../toolbox/loop');
 module.exports = function (id, options) {
   if (options) {
     var self         = this;
     var autoload     = validate.isUndefined(options.autoload) ? true : options.autoload;
-    var autoplay     = validate.isUndefined(options.autoplay) ? true : options.autoplay;
+    var autoplay     = validate.isUndefined(options.autoplay) ? false : options.autoplay;
     var drag         = validate.isUndefined(options.drag) ? true : options.drag;
     var invertFromTo = false;
 
@@ -24,7 +24,7 @@ module.exports = function (id, options) {
 
     self.initialFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
     self.currentFrame = validate.isUndefined(options.initialFrame) ? 0 : options.initialFrame;
-    self.fps          = validate.isUndefined(options.fps) ? 14 : options.fps;
+    self.fps          = validate.isUndefined(options.fps) ? 60 : options.fps;
     self.frames       = options.frames || [];
     self.totalFrames  = self.frames.length - 1; // Included 0
     assetsManifest = self.frames;
@@ -47,11 +47,10 @@ module.exports = function (id, options) {
     // grab canvas width and height for later calculations:
     width             = stage.canvas.width;
     height            = stage.canvas.height;
+    self.container    = stage.canvas.parentNode;
     self.bounds       = stage.canvas.getBoundingClientRect();
     self.screenBounds = document.querySelector('body').getBoundingClientRect();
-
-    // Drag Unit = [distance] / [processed frames in that distance]
-    self.dragUnit = validate.isUndefined(self.dragUnit) ? self.bounds.width / self.frames.length : self.dragUnit;
+    var dragUnit      = self.bounds.width / self.frames.length;
 
     createjs.Ticker.framerate = self.fps;
 
@@ -87,7 +86,7 @@ module.exports = function (id, options) {
     };
 
     var _setupContainer = function (container, options) {
-      collection.each(options.attributes, function (value, key) {
+      loop.each(options.attributes, function (value, key) {
         container[key] = value;
       });
       container.origin  = options.attributes || {};
@@ -113,6 +112,10 @@ module.exports = function (id, options) {
         var container = new createjs.DOMElement(html);
         _setupContainer(container, options);
         html.style.display = "block";
+        html.ondragstart   = function () {
+          return false;
+        };
+
         return container;
       } else {
         throw 'ERROR: DOM Element not found!';
@@ -121,8 +124,8 @@ module.exports = function (id, options) {
     };
 
     var _play = function () {
-      if (self.direction === 'forward') self.currentFrame += Math.ceil(self.speed);
-      if (self.direction === 'backward') self.currentFrame -= Math.ceil(self.speed);
+      if (self.direction === 'forward') self.currentFrame++;
+      if (self.direction === 'backward') self.currentFrame--;
       if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
       if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
       self.show(self.currentFrame);
@@ -246,7 +249,7 @@ module.exports = function (id, options) {
           };
           var attributes   = animation.attributes ? Object.keys(animation.attributes) : Object.keys(animation.radial);
           if (attributes) {
-            collection.iterate(attributes, function (key) {
+            loop.iterate(attributes, function (key) {
               if (animation.attributes) {
                 update(key);
               } else {
@@ -263,9 +266,9 @@ module.exports = function (id, options) {
     };
 
     var _processAnimations = function (hotSpot) {
-      collection.each(hotSpot.animations, function (animations, startFrame) {
+      loop.each(hotSpot.animations, function (animations, startFrame) {
         if (validate.isArray(animations)) {
-          collection.iterate(animations, function (animation) {
+          loop.iterate(animations, function (animation) {
             _processAnimation(hotSpot, animation, startFrame);
           });
         } else {
@@ -276,7 +279,7 @@ module.exports = function (id, options) {
     };
 
     var _updateHotSpots = function () {
-      collection.iterate(self.hotSpots, function (hotSpot) {
+      loop.iterate(self.hotSpots, function (hotSpot) {
         var visible = _visibility(hotSpot);
         if (visible && hotSpot.animations) {
           _processAnimations(hotSpot);
@@ -286,34 +289,79 @@ module.exports = function (id, options) {
 
     };
 
+    var _touchHandler = function (event) {
+      var touches = event.changedTouches,
+          first   = touches[0],
+          type    = "";
+      switch (event.type) {
+        case "touchstart":
+          type = "mousedown";
+          break;
+        case "touchmove":
+          type = "mousemove";
+          break;
+        case "touchend":
+          type = "mouseup";
+          break;
+        default:
+          return;
+      }
+
+      // initMouseEvent(type, canBubble, cancelable, view, clickCount,
+      //                screenX, screenY, clientX, clientY, ctrlKey,
+      //                altKey, shiftKey, metaKey, button, relatedTarget);
+
+      var simulatedEvent = document.createEvent("MouseEvent");
+      simulatedEvent.initMouseEvent(type, true, true, window, 1,
+        first.screenX, first.screenY,
+        first.clientX, first.clientY, false,
+        false, false, false, 0/*left*/, null);
+
+      first.target.dispatchEvent(simulatedEvent);
+      event.preventDefault();
+    };
+
+    document.addEventListener("touchstart", _touchHandler, true);
+    document.addEventListener("touchmove", _touchHandler, true);
+    document.addEventListener("touchend", _touchHandler, true);
+    document.addEventListener("touchcancel", _touchHandler, true);
+
     var _setupDrag = function () {
-      var x0;
-      movie.on("pressmove", function (evt) {
-        self.trigger('drag:start');
-        if (!x0) {
-          x0 = evt.stageX;
-          self.pause();
-        }
-        var x           = evt.stageX;
-        var deltaX      = x - x0;
-        var deltaFrames = Math.abs(deltaX / dragUnit);
-        var step        = Math.ceil(deltaFrames * self.speed);
-        if (deltaX > 0) {
-          self.changeDirection('forward');
-          self.currentFrame += step;
-        } else {
-          self.changeDirection('backward');
-          self.currentFrame -= step;
-        }
-        x0 = x;
-        if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
-        if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
-        self.show(self.currentFrame);
-      });
-      movie.on("pressup", function () {
-        x0 = undefined;
-        self.trigger('drag:end');
-      });
+      self.container.addEventListener("mousedown", function (eventStart) {
+        var x0           = eventStart.offsetX;
+        var dragging     = false;
+        var _onMouseMove = function (eventMove) {
+          if (!dragging) {
+            dragging = true;
+            self.trigger('drag:start');
+          }
+          var x           = eventMove.offsetX;
+          var deltaX      = x - x0;
+          var deltaFrames = Math.abs(deltaX / dragUnit);
+          var step        = Math.ceil(deltaFrames * self.speed);
+          if (deltaX > 0) {
+            self.changeDirection('forward');
+            self.currentFrame += step;
+          } else {
+            self.changeDirection('backward');
+            self.currentFrame -= step;
+          }
+          x0 = x;
+          if (self.currentFrame > self.totalFrames) self.currentFrame = 0;
+          if (self.currentFrame < 0) self.currentFrame = self.totalFrames;
+          self.show(self.currentFrame);
+        };
+
+        var _onMouseUp = function (evt) {
+          self.container.removeEventListener("mousemove", _onMouseMove);
+          document.removeEventListener("mouseup", _onMouseUp);
+          self.trigger('drag:end');
+        };
+
+        self.container.addEventListener("mousemove", _onMouseMove);
+        document.addEventListener("mouseup", _onMouseUp);
+      }, true);
+
     };
 
     var _setScale = function () {
@@ -382,7 +430,7 @@ module.exports = function (id, options) {
         });
 
         var modifAttr = {};
-        collection.iterate(frames, function (frame) {
+        loop.iterate(frames, function (frame) {
           var updateAnimations = function (animation) {
             var attributes = animation.attributes ? animation.attributes : animation.radial;
             if (attributes) {
@@ -392,7 +440,7 @@ module.exports = function (id, options) {
                 animation.toFrame  = animation.toFrame - self.totalFrames;
                 animation.overflow = true;
               }
-              collection.each(attributes, function (value, key) {
+              loop.each(attributes, function (value, key) {
                 var fromKey        = key + '-from', toKey = key + '-to', distanceKey = key + '-distance';
                 animation[fromKey] = validate.isUndefined(modifAttr[key]) ? hotSpot[key] : modifAttr[key];
                 if (animation.attributes) {
@@ -405,7 +453,7 @@ module.exports = function (id, options) {
           };
 
           if (validate.isArray(hotSpot.animations[frame])) {
-            collection.iterate(hotSpot.animations[frame], function (animation) {
+            loop.iterate(hotSpot.animations[frame], function (animation) {
               updateAnimations(animation);
             });
           } else {
@@ -431,7 +479,7 @@ module.exports = function (id, options) {
       if (options.frames) {
         switch (type) {
           case 'array':
-            collection.iterate(options.frames, function (frame) {
+            loop.iterate(options.frames, function (frame) {
               remove(frame, options.hotSpot);
             });
             break;
@@ -444,7 +492,7 @@ module.exports = function (id, options) {
             break;
           case 'number':
             if (validate.isArray(options.hotSpot)) {
-              collection.iterate(options.hotSpot, function (hotSpot) {
+              loop.iterate(options.hotSpot, function (hotSpot) {
                 remove(options.frames, hotSpot);
               });
             } else {
@@ -455,7 +503,7 @@ module.exports = function (id, options) {
         }
       } else {
         if (validate.isArray(options.hotSpot)) {
-          collection.iterate(options.hotSpot, function (hotSpot) {
+          loop.iterate(options.hotSpot, function (hotSpot) {
             remove('global', hotSpot);
           });
         } else {
@@ -487,7 +535,7 @@ module.exports = function (id, options) {
     // Preload Frames
     _preload(function (queue) {
       // Start
-      collection.iterate(queue.getItems(), function (item) {
+      loop.iterate(queue.getItems(), function (item) {
         loadedImages.push(item.result);
       });
       _createFrame(queue);
