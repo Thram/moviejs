@@ -1,4 +1,7 @@
 # MovieJS
+
+[![Greenkeeper badge](https://badges.greenkeeper.io/Thram/moviejs.svg)](https://greenkeeper.io/)
+
 A simple plugin to animate frames with CreateJS.
 ## Setup:
 Just clone the repository or download and run:
